@@ -12,16 +12,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Now the files are in the current build context, so remove the "server/" prefix:
-COPY requirements.txt .
+# Copy requirements from server directory
+COPY server/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of your backend code
-COPY . .
+COPY server/ .
 
-# Copy the wait-for-postgres.sh file
-COPY wait-for-postgres.sh /wait-for-postgres.sh
+# Copy the wait-for-postgres.sh file from server directory
+COPY server/wait-for-postgres.sh /wait-for-postgres.sh
 RUN chmod +x /wait-for-postgres.sh
 
 RUN useradd -m appuser && chown -R appuser /app
