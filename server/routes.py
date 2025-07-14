@@ -7,7 +7,7 @@ import json
 import requests
 import pandas as pd
 import csv
-import openai
+from openai import OpenAI
 
 from flask import Flask, jsonify, request, g
 from firebase_admin import auth
@@ -19,11 +19,37 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 from models import db, User, Watchlist, Portfolio, Transaction, PortfolioHolding, UserThread
-from helpers import convert_data, safe_convert, parse_csv_with_mapping, fetch_stock_data, fetch_market_price, recalc_portfolio, fetch_stock_sector, wait_for_run_completion, cleanup_old_threads, fetch_historical_price, fetch_batch_historical_prices, fetch_market_benchmarks
+from helpers import (
+    convert_data,
+    safe_convert,
+    parse_csv_with_mapping,
+    fetch_stock_data,
+    fetch_market_price,
+    recalc_portfolio,
+    fetch_stock_sector,
+    wait_for_run_completion,
+    cleanup_old_threads,
+    fetch_historical_price,
+    fetch_batch_historical_prices,
+    fetch_market_benchmarks,
+)
 
-openai.api_key = os.getenv("OPENAI_AGENT_API_KEY")
+# Initialize OpenAI client
+openai_client = OpenAI(api_key=os.getenv("OPENAI_AGENT_API_KEY"))
 ASSISTANT_ID = os.getenv("STOCKR_ASSISTANT_ID")
 ALPHA_ID = os.getenv("STOCKR_ALPHA_ID")
+
+# Debug: Check if environment variables are loaded
+print("=== OpenAI Configuration Debug ===")
+print(f"OPENAI_AGENT_API_KEY exists: {bool(os.getenv('OPENAI_AGENT_API_KEY'))}")
+print(f"STOCKR_ASSISTANT_ID exists: {bool(os.getenv('STOCKR_ASSISTANT_ID'))}")
+if os.getenv("OPENAI_AGENT_API_KEY"):
+    api_key = os.getenv("OPENAI_AGENT_API_KEY")
+    print(f"API Key starts with: {api_key[:10]}...")
+else:
+    print("ERROR: OPENAI_AGENT_API_KEY is None or empty!")
+print("=== End Debug ===")
+
 
 def register_routes(app):
 
@@ -33,22 +59,41 @@ def register_routes(app):
         if request.method == "OPTIONS":
             return  # Skip auth for preflight
         protected_endpoints = [
-            'add_to_watchlist', 'get_watchlist_stocks', 'delete_from_watchlist',
-            'get_stock_historical', 'get_crypto_historical', 'get_cash_balance',
-            'add_portfolio_entry', 'get_portfolio_for_graph', 'get_portfolio', 'deposit_cash',
-            'withdraw_cash', 'delete_transaction', 'get_transactions', 'buy_asset', 'sell_asset',
-            'get_portfolio_id', 'sell_portfolio_asset', 'add_portfolio_asset', 'get_stock_market_price',
-            'search_stocks', 'upload_transactions', 'get_portfolio_assistant_context', 'start_chat_thread',
-            'continue_chat_thread', 'get_portfolio_history'
+            "add_to_watchlist",
+            "get_watchlist_stocks",
+            "delete_from_watchlist",
+            "get_stock_historical",
+            "get_crypto_historical",
+            "get_cash_balance",
+            "add_portfolio_entry",
+            "get_portfolio_for_graph",
+            "get_portfolio",
+            "deposit_cash",
+            "withdraw_cash",
+            "delete_transaction",
+            "get_transactions",
+            "buy_asset",
+            "sell_asset",
+            "get_portfolio_id",
+            "sell_portfolio_asset",
+            "add_portfolio_asset",
+            "get_stock_market_price",
+            "search_stocks",
+            "upload_transactions",
+            "get_portfolio_assistant_context",
+            "start_chat_thread",
+            "continue_chat_thread",
+            "get_portfolio_history",
         ]
         if request.endpoint in protected_endpoints:
-            auth_header = request.headers.get('Authorization')
-            if not auth_header or 'Bearer ' not in auth_header:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header or "Bearer " not in auth_header:
                 return jsonify({"error": "Unauthorized"}), 401
-            id_token = auth_header.split('Bearer ')[1]
+            id_token = auth_header.split("Bearer ")[1]
+            print(id_token)
             try:
                 decoded_token = auth.verify_id_token(id_token)
-                g.user = User.query.filter_by(firebase_uid=decoded_token['uid']).first()
+                g.user = User.query.filter_by(firebase_uid=decoded_token["uid"]).first()
                 if not g.user:
                     return jsonify({"error": "User not found"}), 401
             except Exception as e:
@@ -95,7 +140,7 @@ def register_routes(app):
                 "description": stock_description,
                 "outer_ratings": outer_ratings,
                 "news": news,
-                "inside_trader": inside_trader
+                "inside_trader": inside_trader,
             }
             return jsonify(combined_data), 200
         except Exception as e:
@@ -125,9 +170,9 @@ def register_routes(app):
     @app.route("/api/watchlist", methods=["POST"])
     def add_to_watchlist():
         data = request.get_json()
-        if not data or 'ticker' not in data:
+        if not data or "ticker" not in data:
             return jsonify({"error": "Ticker is required"}), 400
-        ticker = data['ticker'].upper()
+        ticker = data["ticker"].upper()
         try:
             new_watchlist_item = Watchlist(user_id=g.user.id, ticker=ticker)
             db.session.add(new_watchlist_item)
@@ -154,7 +199,7 @@ def register_routes(app):
     @app.route("/api/stock/historical/<string:symbol>", methods=["GET"])
     def get_stock_historical(symbol):
         symbol = symbol.upper()
-        url = f'https://www.alphavantage.co/query?function=TIME_SERIES_WEEKLY_ADJUSTED&symbol={symbol}&outputsize=full&apikey={ALPHA_ID}'
+        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_WEEKLY_ADJUSTED&symbol={symbol}&outputsize=full&apikey={ALPHA_ID}"
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -174,7 +219,7 @@ def register_routes(app):
     @app.route("/api/crypto/historical/<string:symbol>", methods=["GET"])
     def get_crypto_historical(symbol):
         symbol = symbol.upper()
-        url = f'https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol={symbol}&market=USD&apikey={ALPHA_ID}'
+        url = f"https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol={symbol}&market=USD&apikey={ALPHA_ID}"
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -199,7 +244,7 @@ def register_routes(app):
             news_data_converted = {}
             for key, value in news_data.items():
                 if hasattr(value, "to_dict"):
-                    news_data_converted[key] = value.to_dict(orient='records')
+                    news_data_converted[key] = value.to_dict(orient="records")
                 else:
                     news_data_converted[key] = value
             response = {"relevant_news": news_data_converted}
@@ -209,8 +254,8 @@ def register_routes(app):
 
     @app.route("/api/ticker-search", methods=["GET"])
     def get_ticker():
-        keyword = request.args.get('keywords', 'Microsoft')
-        url = f'https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords={keyword}&apikey={ALPHA_ID}'
+        keyword = request.args.get("keywords", "Microsoft")
+        url = f"https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords={keyword}&apikey={ALPHA_ID}"
         r = requests.get(url)
         if r.status_code != 200:
             return jsonify({"error": "Failed to fetch data from Alpha Vantage"}), 500
@@ -219,14 +264,14 @@ def register_routes(app):
 
     @app.route("/api/news-sentiment", methods=["GET"])
     def get_news_sentiment():
-        tickers = request.args.get('tickers')
+        tickers = request.args.get("tickers")
         if not tickers:
             return jsonify({"error": "The 'tickers' query parameter is required."}), 400
-        topics = request.args.get('topics')
-        url = f'https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={tickers}'
+        topics = request.args.get("topics")
+        url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={tickers}"
         if topics:
-            url += f'&topics={topics}'
-        url += f'&apikey={ALPHA_ID}'
+            url += f"&topics={topics}"
+        url += f"&apikey={ALPHA_ID}"
         print(url)
         try:
             response = requests.get(url)
@@ -238,10 +283,10 @@ def register_routes(app):
 
     @app.route("/api/income-statement", methods=["GET"])
     def get_income_statement():
-        symbol = request.args.get('symbol')
+        symbol = request.args.get("symbol")
         if not symbol:
             return jsonify({"error": "The 'symbol' query parameter is required."}), 400
-        url = f'https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol={symbol}&apikey={ALPHA_ID}'
+        url = f"https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol={symbol}&apikey={ALPHA_ID}"
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -252,10 +297,10 @@ def register_routes(app):
 
     @app.route("/api/balance-sheet", methods=["GET"])
     def get_balance_sheet():
-        symbol = request.args.get('symbol')
+        symbol = request.args.get("symbol")
         if not symbol:
             return jsonify({"error": "The 'symbol' query parameter is required."}), 400
-        url = f'https://www.alphavantage.co/query?function=BALANCE_SHEET&symbol={symbol}&apikey={ALPHA_ID}'
+        url = f"https://www.alphavantage.co/query?function=BALANCE_SHEET&symbol={symbol}&apikey={ALPHA_ID}"
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -266,10 +311,10 @@ def register_routes(app):
 
     @app.route("/api/cash-flow", methods=["GET"])
     def get_cash_flow():
-        symbol = request.args.get('symbol')
+        symbol = request.args.get("symbol")
         if not symbol:
             return jsonify({"error": "The 'symbol' query parameter is required."}), 400
-        url = f'https://www.alphavantage.co/query?function=CASH_FLOW&symbol={symbol}&apikey={ALPHA_ID}'
+        url = f"https://www.alphavantage.co/query?function=CASH_FLOW&symbol={symbol}&apikey={ALPHA_ID}"
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -281,19 +326,22 @@ def register_routes(app):
     @app.route("/api/portfolio/<string:portfolio_id>", methods=["GET"])
     def get_portfolio(portfolio_id):
         try:
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
             portfolio = Portfolio.query.filter_by(id=portfolio_id, user_id=g.user.id).first()
             if not portfolio:
                 return jsonify({"error": "Portfolio not found or unauthorized"}), 404
             portfolio_entries = PortfolioHolding.query.filter_by(portfolio_id=portfolio_id).all()
-            portfolio_list = [{
-                "ticker": entry.ticker,
-                "shares": float(entry.shares),
-                "average_cost": float(entry.average_cost) if entry.average_cost is not None else 0,
-                "book_value": float(entry.book_value) if entry.book_value is not None else 0,
-                "market_value": 0
-            } for entry in portfolio_entries]
+            portfolio_list = [
+                {
+                    "ticker": entry.ticker,
+                    "shares": float(entry.shares),
+                    "average_cost": float(entry.average_cost) if entry.average_cost is not None else 0,
+                    "book_value": float(entry.book_value) if entry.book_value is not None else 0,
+                    "market_value": 0,
+                }
+                for entry in portfolio_entries
+            ]
             return jsonify({"portfolio": portfolio_list}), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -303,9 +351,9 @@ def register_routes(app):
         data = request.get_json()
         if not data:
             return jsonify({"error": "No data provided."}), 400
-        ticker = data.get('ticker')
-        shares = data.get('shares')
-        price = data.get('price')
+        ticker = data.get("ticker")
+        shares = data.get("shares")
+        price = data.get("price")
         if not ticker or shares is None or price is None:
             return jsonify({"error": "Ticker, shares, and price are required."}), 400
         ticker = ticker.upper()
@@ -314,13 +362,7 @@ def register_routes(app):
             portfolio = Portfolio.query.filter_by(user_id=user.id).first()
             if not portfolio:
                 return jsonify({"error": "Portfolio not found"}), 404
-            new_txn = Transaction(
-                portfolio_id=portfolio.id,
-                ticker=ticker,
-                shares=shares,
-                price=price,
-                transaction_type="buy"
-            )
+            new_txn = Transaction(portfolio_id=portfolio.id, ticker=ticker, shares=shares, price=price, transaction_type="buy")
             db.session.add(new_txn)
             db.session.commit()
             recalc_portfolio(portfolio.id, ticker)
@@ -333,9 +375,9 @@ def register_routes(app):
         data = request.get_json()
         if not data:
             return jsonify({"error": "No data provided."}), 400
-        ticker = data.get('ticker')
-        shares = data.get('shares')
-        price = data.get('price')
+        ticker = data.get("ticker")
+        shares = data.get("shares")
+        price = data.get("price")
         if not ticker or shares is None or price is None:
             return jsonify({"error": "Ticker, shares, and price are required."}), 400
         ticker = ticker.upper()
@@ -347,13 +389,7 @@ def register_routes(app):
             holding = PortfolioHolding.query.filter_by(portfolio_id=portfolio.id, ticker=ticker).first()
             if not holding or holding.shares < shares:
                 return jsonify({"error": "Not enough shares to sell."}), 400
-            new_txn = Transaction(
-                portfolio_id=portfolio.id,
-                ticker=ticker,
-                shares=shares,
-                price=price,
-                transaction_type="sell"
-            )
+            new_txn = Transaction(portfolio_id=portfolio.id, ticker=ticker, shares=shares, price=price, transaction_type="sell")
             db.session.add(new_txn)
             db.session.commit()
             recalc_portfolio(portfolio.id, ticker)
@@ -364,28 +400,22 @@ def register_routes(app):
     @app.route("/api/portfolio/<string:portfolio_id>/add-asset", methods=["POST"])
     def add_portfolio_asset(portfolio_id):
         try:
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
             data = request.get_json()
             if not data:
                 return jsonify({"error": "No data provided."}), 400
-            ticker = data.get('ticker')
-            shares = data.get('shares')
-            price = data.get('price')
-            transaction_type = data.get('transaction_type', 'buy').lower()
+            ticker = data.get("ticker")
+            shares = data.get("shares")
+            price = data.get("price")
+            transaction_type = data.get("transaction_type", "buy").lower()
             if not ticker or shares is None or price is None:
                 return jsonify({"error": "Ticker, shares, and price are required."}), 400
             ticker = ticker.upper()
             portfolio = Portfolio.query.filter_by(id=portfolio_id, user_id=g.user.id).first()
             if not portfolio:
                 return jsonify({"error": "Portfolio not found or unauthorized"}), 404
-            new_txn = Transaction(
-                portfolio_id=portfolio.id,
-                ticker=ticker,
-                shares=shares,
-                price=price,
-                transaction_type=transaction_type
-            )
+            new_txn = Transaction(portfolio_id=portfolio.id, ticker=ticker, shares=shares, price=price, transaction_type=transaction_type)
             db.session.add(new_txn)
             recalc_portfolio(portfolio.id, ticker)
             db.session.commit()
@@ -397,15 +427,15 @@ def register_routes(app):
     @app.route("/api/portfolio/<string:portfolio_id>/sell-asset", methods=["POST"])
     def sell_portfolio_asset(portfolio_id):
         try:
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
             data = request.get_json()
             if not data:
                 return jsonify({"error": "No data provided."}), 400
-            ticker = data.get('ticker')
-            shares = data.get('shares')
-            price = data.get('price')
-            transaction_type = 'sell'
+            ticker = data.get("ticker")
+            shares = data.get("shares")
+            price = data.get("price")
+            transaction_type = "sell"
             if not ticker or shares is None or price is None:
                 return jsonify({"error": "Ticker, shares, and price are required."}), 400
             ticker = ticker.upper()
@@ -415,13 +445,7 @@ def register_routes(app):
             portfolio_entry = PortfolioHolding.query.filter_by(portfolio_id=portfolio.id, ticker=ticker).first()
             if not portfolio_entry or portfolio_entry.shares < shares:
                 return jsonify({"error": "Insufficient shares to sell"}), 400
-            new_txn = Transaction(
-                portfolio_id=portfolio.id,
-                ticker=ticker,
-                shares=shares,
-                price=price,
-                transaction_type=transaction_type
-            )
+            new_txn = Transaction(portfolio_id=portfolio.id, ticker=ticker, shares=shares, price=price, transaction_type=transaction_type)
             db.session.add(new_txn)
             recalc_portfolio(portfolio.id, ticker)
             db.session.commit()
@@ -433,16 +457,15 @@ def register_routes(app):
     @app.route("/api/portfolio/graph/<string:portfolio_id>", methods=["GET"])
     def get_portfolio_for_graph(portfolio_id):
         try:
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
             portfolio = Portfolio.query.filter_by(id=portfolio_id, user_id=g.user.id).first()
             if not portfolio:
                 return jsonify({"error": "Portfolio not found or unauthorized"}), 404
             portfolio_entries = PortfolioHolding.query.filter_by(portfolio_id=portfolio_id).all()
-            portfolio_list = [{
-                "ticker": entry.ticker,
-                "book_value": float(entry.book_value) if entry.book_value is not None else 0
-            } for entry in portfolio_entries]
+            portfolio_list = [
+                {"ticker": entry.ticker, "book_value": float(entry.book_value) if entry.book_value is not None else 0} for entry in portfolio_entries
+            ]
             return jsonify({"portfolio": portfolio_list}), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -450,20 +473,23 @@ def register_routes(app):
     @app.route("/api/transactions", methods=["GET"])
     def get_transactions():
         try:
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
             portfolio = Portfolio.query.filter_by(user_id=g.user.id).first()
             if not portfolio:
                 return jsonify({"error": "Portfolio not found"}), 404
             transactions = Transaction.query.filter_by(portfolio_id=portfolio.id).order_by(Transaction.created_at.desc()).limit(15).all()
-            transactions_list = [{
-                "id": txn.id,
-                "ticker": txn.ticker,
-                "shares": float(txn.shares),
-                "price": float(txn.price),
-                "transaction_type": txn.transaction_type,
-                "created_at": txn.created_at.isoformat()
-            } for txn in transactions]
+            transactions_list = [
+                {
+                    "id": txn.id,
+                    "ticker": txn.ticker,
+                    "shares": float(txn.shares),
+                    "price": float(txn.price),
+                    "transaction_type": txn.transaction_type,
+                    "created_at": txn.created_at.isoformat(),
+                }
+                for txn in transactions
+            ]
             return jsonify({"transactions": transactions_list}), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -471,7 +497,7 @@ def register_routes(app):
     @app.route("/api/transactions/<string:transaction_id>", methods=["DELETE"])
     def delete_transaction(transaction_id):
         try:
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
             portfolio = Portfolio.query.filter_by(user_id=g.user.id).first()
             if not portfolio:
@@ -484,36 +510,36 @@ def register_routes(app):
             price = float(transaction.price)
             total_value = shares * price
             holding = PortfolioHolding.query.filter_by(portfolio_id=portfolio.id, ticker=ticker).first()
-            if transaction.transaction_type.lower() == 'buy':
+            if transaction.transaction_type.lower() == "buy":
                 if holding:
                     holding.shares -= shares
                     holding.book_value -= total_value
                     if holding.shares <= 0:
                         db.session.delete(holding)
-            elif transaction.transaction_type.lower() == 'sell':
+            elif transaction.transaction_type.lower() == "sell":
                 if holding:
                     holding.shares += shares
                     holding.book_value += total_value
                 else:
                     new_holding = PortfolioHolding(
-                        id=str(uuid.uuid4()),
-                        portfolio_id=portfolio.id,
-                        ticker=ticker,
-                        shares=shares,
-                        average_cost=price,
-                        book_value=total_value
+                        id=str(uuid.uuid4()), portfolio_id=portfolio.id, ticker=ticker, shares=shares, average_cost=price, book_value=total_value
                     )
                     db.session.add(new_holding)
             db.session.delete(transaction)
             db.session.commit()
-            return jsonify({
-                "message": "Transaction deleted successfully.",
-                "updated_portfolio": {
-                    "ticker": ticker,
-                    "shares": float(holding.shares) if holding else 0,
-                    "book_value": float(holding.book_value) if holding else 0
-                }
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "message": "Transaction deleted successfully.",
+                        "updated_portfolio": {
+                            "ticker": ticker,
+                            "shares": float(holding.shares) if holding else 0,
+                            "book_value": float(holding.book_value) if holding else 0,
+                        },
+                    }
+                ),
+                200,
+            )
         except Exception as e:
             db.session.rollback()
             return jsonify({"error": str(e)}), 500
@@ -523,28 +549,23 @@ def register_routes(app):
         try:
             data = request.get_json()
             print("Received data:", data)
-            if not data or 'firebase_uid' not in data:
+            if not data or "firebase_uid" not in data:
                 return jsonify({"error": "Firebase UID is required"}), 400
-            existing_user = User.query.filter_by(firebase_uid=data['firebase_uid']).first()
+            existing_user = User.query.filter_by(firebase_uid=data["firebase_uid"]).first()
             if existing_user:
                 portfolio = Portfolio.query.filter_by(user_id=existing_user.id).first()
-                return jsonify({
-                    "message": "User already exists",
-                    "user_id": existing_user.id,
-                    "portfolio_id": portfolio.id if portfolio else None
-                }), 200
-            new_user = User(id=str(uuid.uuid4()), firebase_uid=data['firebase_uid'])
+                return (
+                    jsonify({"message": "User already exists", "user_id": existing_user.id, "portfolio_id": portfolio.id if portfolio else None}),
+                    200,
+                )
+            new_user = User(id=str(uuid.uuid4()), firebase_uid=data["firebase_uid"])
             db.session.add(new_user)
             db.session.commit()
             new_portfolio = Portfolio(id=str(uuid.uuid4()), user_id=new_user.id)
             db.session.add(new_portfolio)
             db.session.commit()
             print("User and portfolio created successfully:", new_user.id, new_portfolio.id)
-            return jsonify({
-                "message": "User created",
-                "user_id": new_user.id,
-                "portfolio_id": new_portfolio.id
-            }), 201
+            return jsonify({"message": "User created", "user_id": new_user.id, "portfolio_id": new_portfolio.id}), 201
         except Exception as e:
             print("Error creating user:", str(e))
             db.session.rollback()
@@ -553,7 +574,7 @@ def register_routes(app):
     @app.route("/api/portfolio/id", methods=["GET"])
     def get_portfolio_id():
         try:
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
             portfolio = Portfolio.query.filter_by(user_id=g.user.id).first()
             if not portfolio:
@@ -565,7 +586,7 @@ def register_routes(app):
     @app.route("/api/portfolio/<string:portfolio_id>/upload-transactions", methods=["POST"])
     def upload_transactions(portfolio_id):
         # Ensure the user is authenticated.
-        if not hasattr(g, 'user') or g.user is None:
+        if not hasattr(g, "user") or g.user is None:
             return jsonify({"error": "User not authenticated"}), 401
 
         # Ensure a file was uploaded.
@@ -583,6 +604,7 @@ def register_routes(app):
 
             # Parse the CSV using the flexible mapping helper.
             transactions = parse_csv_with_mapping(stream)
+            print(transactions)
             if not transactions:
                 return jsonify({"error": "No valid transactions found in the file"}), 400
 
@@ -640,16 +662,10 @@ def register_routes(app):
                         shares=shares,
                         price=price,
                         transaction_type=transaction_type,
-                        created_at=created_at_val
+                        created_at=created_at_val,
                     )
                 else:
-                    new_txn = Transaction(
-                        portfolio_id=portfolio.id,
-                        ticker=ticker,
-                        shares=shares,
-                        price=price,
-                        transaction_type=transaction_type
-                    )
+                    new_txn = Transaction(portfolio_id=portfolio.id, ticker=ticker, shares=shares, price=price, transaction_type=transaction_type)
 
                 db.session.add(new_txn)
                 transactions_added += 1
@@ -662,10 +678,12 @@ def register_routes(app):
 
             if errors:
                 return (
-                    jsonify({
-                        "message": f"{transactions_added} transactions added with some errors.",
-                        "errors": errors,
-                    }),
+                    jsonify(
+                        {
+                            "message": f"{transactions_added} transactions added with some errors.",
+                            "errors": errors,
+                        }
+                    ),
                     207,
                 )
 
@@ -684,7 +702,7 @@ def register_routes(app):
         Returns data points for plotting a line chart of portfolio growth.
         """
         try:
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
 
             # Verify the portfolio belongs to the user
@@ -740,11 +758,7 @@ def register_routes(app):
 
             for ticker in unique_tickers:
                 # Use the fetch_batch_historical_prices helper function
-                prices = fetch_batch_historical_prices(
-                    ticker,
-                    start_date.isoformat(),
-                    end_date.isoformat()
-                )
+                prices = fetch_batch_historical_prices(ticker, start_date.isoformat(), end_date.isoformat())
                 ticker_historical_prices[ticker] = prices
 
                 # Ensure we don't hit API rate limits
@@ -775,9 +789,9 @@ def register_routes(app):
                         ticker = txn.ticker
                         shares = float(txn.shares)
 
-                        if txn.transaction_type.lower() == 'buy':
+                        if txn.transaction_type.lower() == "buy":
                             holdings[ticker] += shares
-                        elif txn.transaction_type.lower() == 'sell':
+                        elif txn.transaction_type.lower() == "sell":
                             holdings[ticker] -= shares
 
                 # Calculate portfolio value for this day using historical market prices
@@ -811,11 +825,7 @@ def register_routes(app):
                         app.logger.warning(f"No price found for {ticker} on {date_str}")
 
                 # Add data point for this day
-                portfolio_history.append({
-                    "date": date_str,
-                    "value": round(day_value, 2),
-                    "market_value": round(day_value, 2)
-                })
+                portfolio_history.append({"date": date_str, "value": round(day_value, 2), "market_value": round(day_value, 2)})
 
             # Add current day using real-time market prices
             current_day_value = 0
@@ -847,20 +857,23 @@ def register_routes(app):
                                 break
 
             # Add current day data point
-            portfolio_history.append({
-                "date": end_date.isoformat(),
-                "value": round(current_day_value, 2),
-                "market_value": round(current_day_value, 2)
-            })
+            portfolio_history.append(
+                {"date": end_date.isoformat(), "value": round(current_day_value, 2), "market_value": round(current_day_value, 2)}
+            )
 
             app.logger.info(f"Calculated {len(portfolio_history)} portfolio history data points")
             app.logger.info(f"Final portfolio value: ${round(current_day_value, 2)}")
 
-            return jsonify({
-                "history": portfolio_history,
-                "message": "Portfolio history with current market values",
-                "total_value": round(current_day_value, 2)
-            }), 200
+            return (
+                jsonify(
+                    {
+                        "history": portfolio_history,
+                        "message": "Portfolio history with current market values",
+                        "total_value": round(current_day_value, 2),
+                    }
+                ),
+                200,
+            )
 
         except Exception as e:
             app.logger.error(f"Error calculating portfolio history: {e}", exc_info=True)
@@ -868,11 +881,11 @@ def register_routes(app):
 
     # --- Assistant ---
 
-    @app.route('/api/portfolio/chat', methods=['POST'])
+    @app.route("/api/portfolio/chat", methods=["POST"])
     def start_chat_thread():
         try:
             # Ensure user is authenticated
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
 
             data = request.get_json()
@@ -909,15 +922,17 @@ def register_routes(app):
                     # Get detailed stock data
                     try:
                         stock_data = fetch_stock_data(entry.ticker)
-                        fundamentals = stock_data.get('fundamentals', {})
-                        sector = fundamentals.get('sector') or fetch_stock_sector(entry.ticker) or "Unknown"
+                        fundamentals = stock_data.get("fundamentals", {})
+                        sector = fundamentals.get("sector") or fetch_stock_sector(entry.ticker) or "Unknown"
                         total_value = float(entry.shares) * float(entry.average_cost)
-                        current_price = fundamentals.get('current_price', 'N/A')
+                        current_price = fundamentals.get("current_price", "N/A")
 
                         # Calculate performance metrics
-                        market_value = float(entry.shares) * float(
-                            current_price.replace('$', '').replace(',', '')) if isinstance(current_price,
-                                                                                           str) and current_price != 'N/A' else total_value
+                        market_value = (
+                            float(entry.shares) * float(current_price.replace("$", "").replace(",", ""))
+                            if isinstance(current_price, str) and current_price != "N/A"
+                            else total_value
+                        )
                         gain_loss = market_value - total_value
                         gain_loss_percentage = (gain_loss / total_value) * 100 if total_value > 0 else 0
 
@@ -946,57 +961,47 @@ def register_routes(app):
                         portfolio_context += (
                             f"- {entry.ticker.upper()} ({sector}): "
                             f"{float(entry.shares):.2f} shares at avg ${float(entry.average_cost):.2f}, "
-                            f"total value ${total_value:.2f}. (Error fetching detailed metrics: {str(e)})\n")
+                            f"total value ${total_value:.2f}. (Error fetching detailed metrics: {str(e)})\n"
+                        )
 
             # Create a new thread
             try:
-                thread = openai.beta.threads.create()
+                thread = openai_client.beta.threads.create()
             except Exception as e:
                 app.logger.error(f"Error creating OpenAI thread: {e}")
                 return jsonify({"error": "Failed to create chat thread", "details": str(e)}), 500
 
             # Send system message with portfolio context
             try:
-                openai.beta.threads.messages.create(
-                    thread_id=thread.id,
-                    role="user",
-                    content=portfolio_context
-                )
+                openai_client.beta.threads.messages.create(thread_id=thread.id, role="user", content=portfolio_context)
             except Exception as e:
                 app.logger.error(f"Error sending system message: {e}")
                 return jsonify({"error": "Failed to send system message", "details": str(e)}), 500
 
             # Send the user's question
             try:
-                openai.beta.threads.messages.create(
-                    thread_id=thread.id,
-                    role="user",
-                    content=user_question
-                )
+                openai_client.beta.threads.messages.create(thread_id=thread.id, role="user", content=user_question)
             except Exception as e:
                 app.logger.error(f"Error sending user message: {e}")
                 return jsonify({"error": "Failed to send user message", "details": str(e)}), 500
 
             # Start the assistant run
             try:
-                run = openai.beta.threads.runs.create(
-                    thread_id=thread.id,
-                    assistant_id=ASSISTANT_ID
-                )
+                run = openai_client.beta.threads.runs.create(thread_id=thread.id, assistant_id=ASSISTANT_ID)
             except Exception as e:
                 app.logger.error(f"Error starting OpenAI run: {e}")
                 return jsonify({"error": "Failed to start chat run", "details": str(e)}), 500
 
             # Wait for the run to complete
             try:
-                run = wait_for_run_completion(thread.id, run.id)
+                run = wait_for_run_completion(thread.id, run.id, openai_client)
             except Exception as e:
                 app.logger.error(f"Error waiting for run completion: {e}")
                 return jsonify({"error": "Chat run did not complete", "details": str(e)}), 500
 
             # Retrieve assistant's response
             try:
-                messages_response = openai.beta.threads.messages.list(thread_id=thread.id)
+                messages_response = openai_client.beta.threads.messages.list(thread_id=thread.id)
                 assistant_message = next((msg for msg in messages_response.data if msg.role == "assistant"), None)
             except Exception as e:
                 app.logger.error(f"Error retrieving assistant message: {e}")
@@ -1010,24 +1015,17 @@ def register_routes(app):
 
             # Store the thread for future messages
             # Store the thread for future messages
-            user_thread = UserThread(
-                user_id=str(g.user.id),
-                thread_id=thread.id,
-                created_at=datetime.now()
-            )
+            user_thread = UserThread(user_id=str(g.user.id), thread_id=thread.id, created_at=datetime.now())
             db.session.add(user_thread)
             db.session.commit()
 
-            return jsonify({
-                "threadId": thread.id,
-                "answer": assistant_response
-            }), 200
+            return jsonify({"threadId": thread.id, "answer": assistant_response}), 200
 
         except Exception as e:
             app.logger.error(f"Error in start_chat_thread: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
 
-    @app.route('/api/portfolio/chat/<string:thread_id>', methods=['POST'])
+    @app.route("/api/portfolio/chat/<string:thread_id>", methods=["POST"])
     def continue_chat_thread(thread_id):
         """
         Continue an existing chat thread with a new message.
@@ -1035,7 +1033,7 @@ def register_routes(app):
         """
         try:
             # Ensure user is authenticated
-            if not hasattr(g, 'user') or g.user is None:
+            if not hasattr(g, "user") or g.user is None:
                 return jsonify({"error": "User not authenticated"}), 401
 
             # Get the user question from the request body
@@ -1053,20 +1051,21 @@ def register_routes(app):
             portfolio = Portfolio.query.filter_by(user_id=g.user.id).first()
             if portfolio:
                 # Find the most recently updated holding
-                latest_holding_update = db.session.query(db.func.max(PortfolioHolding.updated_at)) \
-                    .filter(PortfolioHolding.portfolio_id == portfolio.id).scalar()
+                latest_holding_update = (
+                    db.session.query(db.func.max(PortfolioHolding.updated_at)).filter(PortfolioHolding.portfolio_id == portfolio.id).scalar()
+                )
 
                 # Check for new transactions since thread creation
-                latest_transaction = db.session.query(db.func.max(Transaction.created_at)) \
-                    .filter(Transaction.portfolio_id == portfolio.id).scalar()
+                latest_transaction = db.session.query(db.func.max(Transaction.created_at)).filter(Transaction.portfolio_id == portfolio.id).scalar()
 
                 # If holdings were updated or new transactions added after thread creation
-                if (latest_holding_update and latest_holding_update > user_thread.created_at) or \
-                        (latest_transaction and latest_transaction > user_thread.created_at):
+                if (latest_holding_update and latest_holding_update > user_thread.created_at) or (
+                    latest_transaction and latest_transaction > user_thread.created_at
+                ):
 
                     # Delete old thread from OpenAI
                     try:
-                        openai.beta.threads.delete(thread_id=thread_id)
+                        openai_client.beta.threads.delete(thread_id=thread_id)
                     except Exception as e:
                         app.logger.error(f"Error deleting outdated thread: {e}")
 
@@ -1078,23 +1077,16 @@ def register_routes(app):
                     return start_chat_thread()
 
             # Add the user's question to the thread
-            openai.beta.threads.messages.create(
-                thread_id=thread_id,
-                role="user",
-                content=user_question
-            )
+            openai_client.beta.threads.messages.create(thread_id=thread_id, role="user", content=user_question)
 
             # Run the Assistant
-            run = openai.beta.threads.runs.create(
-                thread_id=thread_id,
-                assistant_id=ASSISTANT_ID
-            )
+            run = openai_client.beta.threads.runs.create(thread_id=thread_id, assistant_id=ASSISTANT_ID)
 
             # Wait for the run to complete
-            run = wait_for_run_completion(thread_id, run.id)
+            run = wait_for_run_completion(thread_id, run.id, openai_client)
 
             # Retrieve the assistant's response
-            messages = openai.beta.threads.messages.list(thread_id=thread_id)
+            messages = openai_client.beta.threads.messages.list(thread_id=thread_id)
             # Get the most recent assistant message
             assistant_message = next((msg for msg in messages.data if msg.role == "assistant"), None)
 
@@ -1108,9 +1100,7 @@ def register_routes(app):
             user_thread.last_used = datetime.now()
             db.session.commit()
 
-            return jsonify({
-                "answer": assistant_response
-            }), 200
+            return jsonify({"answer": assistant_response}), 200
 
         except Exception as e:
             print(f"Error in continue_chat_thread: {str(e)}")

@@ -182,7 +182,7 @@ export default function StockHistoricalChart({
   };
 
   return (
-      <div className={`bg-white shadow-lg p-4 max-w-xl w-[600px]`}>
+      <div className="bg-white shadow-lg p-4 max-w-xl w-[600px] max-h-[80vh] overflow-y-auto">
         {/* Header with title and close button */}
 
         <div className="flex justify-between items-start">

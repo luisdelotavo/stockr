@@ -4,6 +4,8 @@ import React, { useEffect, useState, useRef } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/firebase/config";
 import ProtectedRoute from "@/components/protectedroute";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Message {
   id: string;
@@ -167,7 +169,7 @@ export default function AgentPage() {
   return (
     <ProtectedRoute>
       <div>
-        <div className="flex flex-col items-start justify-center pl-20 min-h-screen">
+        <div className="flex flex-col items-start justify-center pl-20 h-full">
           {/* Header Section - Fixed position */}
           <header className="w-full">
             <h1 className="text-[10rem] tracking-[-0.1em] -ml-4">Agent.</h1>
@@ -199,7 +201,25 @@ export default function AgentPage() {
                             message.role === "user" ? "bg-blue-600 text-white rounded-tr-none" : "bg-gray-100 text-gray-800 rounded-tl-none"
                           }`}
                         >
-                          {message.content}
+                          {message.role === "assistant" ? (
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={{
+                                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                ul: ({ children }) => <ul className="mb-2 last:mb-0 list-disc pl-4">{children}</ul>,
+                                ol: ({ children }) => <ol className="mb-2 last:mb-0 list-decimal pl-4">{children}</ol>,
+                                li: ({ children }) => <li className="mb-1">{children}</li>,
+                                strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                                em: ({ children }) => <em className="italic">{children}</em>,
+                                code: ({ children }) => <code className="bg-gray-200 px-1 py-0.5 rounded text-sm">{children}</code>,
+                                pre: ({ children }) => <pre className="bg-gray-200 p-2 rounded text-sm overflow-x-auto">{children}</pre>,
+                              }}
+                            >
+                              {message.content}
+                            </ReactMarkdown>
+                          ) : (
+                            message.content
+                          )}
                         </div>
                       </div>
                     ))}

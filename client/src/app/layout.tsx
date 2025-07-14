@@ -15,9 +15,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         {/* Additional head elements if needed */}
       </head>
-      <body className={`overflow-y-hidden`}>
-        <Navbar />
-        <div className="container">{children}</div>
+      <body className="h-screen overflow-x-hidden">
+        <div className="h-full flex flex-col">
+          <Navbar />
+          <div className="flex-1 overflow-y-auto">
+            <div className="container h-full">{children}</div>
+          </div>
+        </div>
 
         <Script
           src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.6/dist/umd/popper.min.js"

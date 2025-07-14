@@ -1,7 +1,7 @@
 # Define service names based on your docker-compose.yml setup
 FRONTEND_SERVICE=frontend
 BACKEND_SERVICE=backend
-DB_SERVICE=db
+DB_SERVICE=postgres
 DOCKER_COMPOSE_FILE=docker-compose.yml
 
 # Build all services (frontend, backend, and database)

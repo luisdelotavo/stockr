@@ -44,6 +44,40 @@ async function getFirebaseIdToken(): Promise<string | null> {
   });
 }
 
+// Helper function to process requests in batches with concurrency limit
+async function processBatchRequests<T, R>(
+  items: T[],
+  processor: (item: T, index: number) => Promise<R>,
+  concurrency: number = 3,
+  fallbackValue?: (item: T, index: number, error: any) => R
+): Promise<R[]> {
+  const results: R[] = [];
+  
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchPromises = batch.map(async (item, batchIndex) => {
+      try {
+        return await processor(item, i + batchIndex);
+      } catch (err) {
+        console.error(`Error processing item at index ${i + batchIndex}:`, err);
+        if (fallbackValue) {
+          return fallbackValue(item, i + batchIndex, err);
+        }
+        throw err;
+      }
+    });
+    
+    const batchResults = await Promise.allSettled(batchPromises);
+    for (const result of batchResults) {
+      if (result.status === 'fulfilled') {
+        results.push(result.value);
+      }
+    }
+  }
+  
+  return results;
+}
+
 export default function HomePage() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -165,52 +199,91 @@ export default function HomePage() {
 
     const data = await response.json();
 
-    // Fetch market data for each asset
-    const portfolioWithMarketValues = await Promise.all(
-      data.portfolio.map(async (entry: PortfolioEntry, index: number) => {
-        try {
-          const marketData = await fetchMarketPrice(entry.ticker);
-          const marketPrice = marketData.market_price !== "N/A" ? Number(marketData.market_price) : null;
-          const shares = Number(entry.shares) || 0;
-          const marketValue = marketPrice !== null ? marketPrice * shares : null;
+    // Fetch market data for each asset with batch processing (limit concurrency)
+    const portfolioWithMarketValues = await processBatchRequests(
+      data.portfolio,
+      async (entry: PortfolioEntry, index: number) => {
+        const marketData = await fetchMarketPrice(entry.ticker);
+        const marketPrice = marketData.market_price !== "N/A" ? Number(marketData.market_price) : null;
+        const shares = Number(entry.shares) || 0;
+        const marketValue = marketPrice !== null ? marketPrice * shares : null;
 
-          return {
-            ...entry,
-            market_price: marketPrice,
-            market_value: marketValue,
-            color: grayShades[index % grayShades.length] // Assign a color from the gray shades
-          };
-        } catch (err) {
-          console.error(`Error processing ${entry.ticker}:`, err);
-          return { ...entry, market_price: null, market_value: null, color: grayShades[index % grayShades.length] };
-        }
-      })
+        return {
+          ...entry,
+          market_price: marketPrice,
+          market_value: marketValue,
+          color: grayShades[index % grayShades.length] // Assign a color from the gray shades
+        };
+      },
+      3, // Limit to 3 concurrent requests
+      (entry: PortfolioEntry, index: number, error: any) => {
+        // Fallback value when market price fetch fails
+        console.warn(`Using fallback for ${entry.ticker} due to error:`, error);
+        return {
+          ...entry,
+          market_price: null,
+          market_value: null,
+          color: grayShades[index % grayShades.length]
+        };
+      }
     );
 
     // Calculate portfolio percentages
     return calculatePortfolioPercentage(portfolioWithMarketValues);
   };
 
-  // Fetch market price for a ticker
-  const fetchMarketPrice = async (ticker: string) => {
+  // Fetch market price for a ticker with timeout and retry logic
+  const fetchMarketPrice = async (ticker: string, retries: number = 1) => {
     const token = await getFirebaseIdToken();
     if (!token) throw new Error("Authentication required");
 
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL}/api/stock/current/${ticker}`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/stock/current/${ticker}`,
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            signal: controller.signal,
+          }
+        );
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch market price for ${ticker}`);
+        }
+
+        const data = await response.json();
+        
+        // If the API returned an error, handle it gracefully
+        if (data.error) {
+          console.warn(`API returned error for ${ticker}: ${data.error}`);
+          return { ticker, market_price: "N/A", error: data.error };
+        }
+
+        return data;
+      } catch (error: any) {
+        if (error.name === 'AbortError') {
+          console.warn(`Request timeout for ${ticker}`);
+          if (attempt < retries - 1) continue; // Retry on timeout
+          return { ticker, market_price: "N/A", error: "Request timeout" };
+        }
+        
+        if (attempt < retries - 1) {
+          console.warn(`Attempt ${attempt + 1} failed for ${ticker}, retrying...`);
+          continue;
+        }
+        
+        console.error(`Error fetching market price for ${ticker}:`, error);
+        return { ticker, market_price: "N/A", error: error.message };
       }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch market price for ${ticker}`);
     }
-
-    return await response.json();
   };
 
   // Fetch portfolio history
@@ -304,22 +377,25 @@ export default function HomePage() {
 
     try {
       setLoading(true);
-      const updatedPortfolio = await Promise.all(
-        portfolioData.map(async (entry) => {
-          try {
-            const marketData = await fetchMarketPrice(entry.ticker);
-            const marketPrice = marketData.market_price !== "N/A" ? Number(marketData.market_price) : null;
-            const marketValue = marketPrice !== null ? marketPrice * entry.shares : null;
+      const updatedPortfolio = await processBatchRequests(
+        portfolioData,
+        async (entry: PortfolioEntry) => {
+          const marketData = await fetchMarketPrice(entry.ticker);
+          const marketPrice = marketData.market_price !== "N/A" ? Number(marketData.market_price) : null;
+          const marketValue = marketPrice !== null ? marketPrice * entry.shares : null;
 
-            return {
-              ...entry,
-              market_price: marketPrice,
-              market_value: marketValue
-            };
-          } catch (err) {
-            return entry; // Keep the old data if fetching fails
-          }
-        })
+          return {
+            ...entry,
+            market_price: marketPrice,
+            market_value: marketValue
+          };
+        },
+        3, // Limit to 3 concurrent requests
+        (entry: PortfolioEntry, index: number, error: any) => {
+          // Fallback: keep the old data if fetching fails
+          console.warn(`Refresh failed for ${entry.ticker}, keeping old data:`, error);
+          return entry;
+        }
       );
 
       // Recalculate portfolio percentages and update state
@@ -347,7 +423,7 @@ export default function HomePage() {
   if (error) {
     return (
       <ProtectedRoute>
-        <div className="flex flex-col items-center justify-center min-h-screen">
+        <div className="flex flex-col items-center justify-center h-full">
           <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded">
             <p className={`font-medium`}>Error</p>
             <p className={``}>{error}</p>
@@ -365,7 +441,7 @@ export default function HomePage() {
 
   return (
     <ProtectedRoute>
-      <div className="flex flex-col items-start pl-20 min-h-screen pt-24">
+      <div className="flex flex-col items-start pl-20 h-full pt-24">
         <div className="w-full grid grid-cols-5 mb-4">
           {/* Left chart - Growth Chart (60%) */}
           <div className="col-span-3 bg-white overflow-hidden h-[300px]">
@@ -385,7 +461,7 @@ export default function HomePage() {
         </div>
 
         {/* Portfolio Table Section */}
-        <div className={`w-11/12 tracking-[-0.08em] bg-white`}>
+        <div className={`w-11/12 tracking-[-0.08em] bg-white flex-1 overflow-hidden`}>
           <PortfolioTable
             portfolioData={portfolioData}
             portfolioId={portfolioId}
