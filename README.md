@@ -52,3 +52,9 @@ Accessible through https://www.stockr.info/
 
 ## Architecture
 The application follows a modern full-stack approach with a React/Next.js frontend, Python/Flask backend, PostgreSQL database, and Firebase for authentication, all containerized with Docker for easy deployment and development.
+
+## Depracated
+The hosted demo at https://www.stockr.info/ is offline to avoid ongoing infrastructure costs.  
+- The repo remains available for reference and local use. Screenshots below reflect the final production build.
+
+
